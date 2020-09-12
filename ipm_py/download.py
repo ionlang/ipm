@@ -1,7 +1,6 @@
 import logging
 import urllib.request
 import urllib.parse
-import subprocess
 import os
 import sys
 import shutil
@@ -33,6 +32,7 @@ def do_download(args):
 def download_http(url: str, path_to: str):
     import tempfile
     import mimetypes
+    url = urllib.parse.urldefrag(url).url
     mime = mimetypes.MimeTypes()
     mime, encoding = mime.guess_type(url)
     if mime not in ("application/x-tar","application/zip" ):
@@ -52,8 +52,32 @@ def download_git(url: str, path_to: str):
     if not git:
         logging.getLogger("imp-py").error("Can't find git executable in PATH.")
         exit(1)
-    raise NotImplementedError
-    # TODO!!
+    url = urllib.parse.urldefrag(url).url
+    url = urllib.parse.urlsplit(url)
+    new_path, at, refspec = url.path.rpartition("@")
+    if not at:
+        new_path, refspec = refspec, None
+    url = url._replace(path=new_path).geturl()
+    import tempfile
+    import subprocess
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            subprocess.run([git, "init", tmpdir], check=True)
+            subprocess.run([git, "remote", "add", "origin", url], cwd=tmpdir, check=True)
+            if refspec:
+                subprocess.run([git, "fetch", "--depth=1", "origin", refspec], cwd=tmpdir, check=True)
+            else:
+                subprocess.run([git, "fetch", "--depth=1", "origin"], cwd=tmpdir, check=True)
+            subprocess.run([git, "reset", "--hard", "FETCH_HEAD"], cwd=tmpdir, check=True)
+            shutil.rmtree(os.path.join(tmpdir, ".git"))
+            download_file(tmpdir, path_to)
+    except subprocess.CalledProcessError as e:
+        cmd = e.cmd
+        if isinstance(cmd ,list):
+            import shlex
+            cmd = shlex.join(cmd)
+        logging.getLogger("imp-py").error("Command \"%s\" returned non-zero exit status %d.", cmd, e.returncode)
+        exit(1)
 
 def download_file(path_from: str, path_to: str):
     path_from = os.path.abspath(path_from)
