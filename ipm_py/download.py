@@ -64,11 +64,12 @@ def download_git(url: str, path_to: str):
         with tempfile.TemporaryDirectory() as tmpdir:
             subprocess.run([git, "init", tmpdir], check=True)
             subprocess.run([git, "remote", "add", "origin", url], cwd=tmpdir, check=True)
-            if refspec:
-                subprocess.run([git, "fetch", "--depth=1", "origin", refspec], cwd=tmpdir, check=True)
-            else:
-                subprocess.run([git, "fetch", "--depth=1", "origin", "HEAD"], cwd=tmpdir, check=True)
+            subprocess.run([git, "fetch", "--depth=1", "origin", refspec or "HEAD"], cwd=tmpdir, check=True)
             subprocess.run([git, "reset", "--hard", "FETCH_HEAD"], cwd=tmpdir, check=True)
+            if not os.path.isfile(os.path.join(tmpdir, "package.json")):
+                logging.getLogger("imp-py").error("%s doesn't contain a package.json file.", tmpdir)
+                exit(1)
+            subprocess.run([git, "submodule", "update", "--init", "--depth=1", "--recursive"], cwd=tmpdir, check=True)
             shutil.rmtree(os.path.join(tmpdir, ".git"))
             download_file(tmpdir, path_to)
     except subprocess.CalledProcessError as e:
