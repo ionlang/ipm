@@ -67,7 +67,9 @@ def download_git(url: str, path_to: str):
             if refspec:
                 subprocess.run([git, "fetch", "--depth=1", "origin", refspec], cwd=tmpdir, check=True)
             else:
-                subprocess.run([git, "fetch", "--depth=1", "origin"], cwd=tmpdir, check=True)
+                completed_process = subprocess.run([git, "ls-remote", "--symref", url, "HEAD"], cwd=tmpdir, check=True, text=True, capture_output=True)
+                head_hash = completed_process.stdout.splitlines()[-1].split()[-1]
+                subprocess.run([git, "fetch", "--depth=1", "origin", head_hash], cwd=tmpdir, check=True)
             subprocess.run([git, "reset", "--hard", "FETCH_HEAD"], cwd=tmpdir, check=True)
             shutil.rmtree(os.path.join(tmpdir, ".git"))
             download_file(tmpdir, path_to)
