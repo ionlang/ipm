@@ -5,13 +5,21 @@ import os
 import sys
 import shutil
 import json
+import tempfile
+import subprocess
+import stat
+import shlex
+import mimetypes
+import tarfile
+import zipfile
+
 
 def do_download(args):
     url = urllib.parse.urlparse(args.url)
     if url.netloc and not url.scheme:
         logging.getLogger("ipm-py").error("Missing url scheme")
         exit(1)
-    
+
     if not url.scheme or url.scheme == "file":
         download_file(url.path, args.path)
         logging.getLogger("ipm-py").info("Done.")
@@ -29,15 +37,15 @@ def do_download(args):
         logging.getLogger("ipm-py").error("Unsuported url scheme (%s).", url.scheme)
         exit(1)
 
+
 def download_http(url: str, path_to: str):
-    import tempfile
-    import mimetypes
     url = urllib.parse.urldefrag(url).url
     mime = mimetypes.MimeTypes()
     mime, encoding = mime.guess_type(url)
-    if mime not in ("application/x-tar","application/zip" ):
+    if mime not in ("application/x-tar", "application/zip"):
         logging.getLogger("imp-py").error("Unsuported mime type %s.", mime)
         exit(1)
+
     filename = urllib.parse.urlsplit(url).path.rsplit("/", 1)[-1]
     with tempfile.NamedTemporaryFile(mode="wb", suffix="_" + filename if filename else None) as tmpf:
         logging.getLogger("imp-py").info("Connecting to %s", urllib.parse.urlsplit(url).hostname)
@@ -58,35 +66,40 @@ def download_git(url: str, path_to: str):
     if not at:
         new_path, refspec = refspec, None
     url = url._replace(path=new_path).geturl()
-    import tempfile
-    import subprocess
+    filename = urllib.parse.urlsplit(url).path.rsplit("/", 1)[-1]
+    if filename.endswith(".git"):
+        filename = filename[:-4]
     try:
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with tempfile.TemporaryDirectory(suffix="_" + filename if filename else None) as tmpdir:
             subprocess.run([git, "init", tmpdir], check=True)
-            subprocess.run([git, "remote", "add", "origin", url], cwd=tmpdir, check=True)
-            subprocess.run([git, "fetch", "--depth=1", "origin", refspec or "HEAD"], cwd=tmpdir, check=True)
-            subprocess.run([git, "reset", "--hard", "FETCH_HEAD"], cwd=tmpdir, check=True)
+            subprocess.run([git, "pull", "--depth=1", url, refspec or "HEAD"], cwd=tmpdir, check=True)
             if not os.path.isfile(os.path.join(tmpdir, "package.json")):
                 logging.getLogger("imp-py").error("%s doesn't contain a package.json file.", tmpdir)
                 exit(1)
-            subprocess.run([git, "submodule", "update", "--init", "--depth=1", "--recursive"], cwd=tmpdir, check=True)
-            shutil.rmtree(os.path.join(tmpdir, ".git"))
+            subprocess.run([git, "submodule", "update", "--init", "--recursive", "--depth=1"], cwd=tmpdir, check=True)
+            result = subprocess.run([git, "submodule", "status", "--recursive"], cwd=tmpdir, check=True, text=True, capture_output=True)
+
+            for path in (x.split()[1] for x in result.stdout.splitlines()):
+                os.unlink(os.path.join(tmpdir, path, ".git"))
+            def onerror(func, path, exc_info):
+                os.chmod(path, stat.S_IWRITE)
+                os.unlink(path)
+            shutil.rmtree(os.path.join(tmpdir, ".git"), onerror=onerror)
             download_file(tmpdir, path_to)
     except subprocess.CalledProcessError as e:
         cmd = e.cmd
-        if isinstance(cmd ,list):
-            import shlex
+        if isinstance(cmd, list):
             cmd = shlex.join(cmd)
         logging.getLogger("imp-py").error("Command \"%s\" returned non-zero exit status %d.", cmd, e.returncode)
         exit(1)
+
 
 def download_file(path_from: str, path_to: str):
     path_from = os.path.abspath(path_from)
     if not os.path.exists(path_from):
         logging.getLogger("imp-py").error("%s doesn't exist.", path_from)
         exit(1)
-    
-    import mimetypes
+
     mime = mimetypes.MimeTypes()
     mime, encoding = mime.guess_type(path_from)
     if os.path.isdir(path_from):
@@ -100,8 +113,6 @@ def download_file(path_from: str, path_to: str):
         logging.getLogger("imp-py").info("Copying %s to %s", path_from, os.path.join(path_to, package_name))
         shutil.copytree(path_from, os.path.join(path_to, package_name))
     elif mime == "application/x-tar":
-        import tarfile
-        import tempfile
         tar = tarfile.open(path_from, "r:*")
         try:
             info = tar.getmember("./package.json")
@@ -111,7 +122,6 @@ def download_file(path_from: str, path_to: str):
         if not info.isfile():
             logging.getLogger("imp-py").error("%s/package.json must be a (regular) file.", path_from)
             exit(1)
-        import tempfile
         with tempfile.TemporaryDirectory() as tempdirname:
             tar.extract("./package.json", tempdirname)
             with open(os.path.join(tempdirname, "package.json"), "r") as f:
@@ -124,8 +134,6 @@ def download_file(path_from: str, path_to: str):
         logging.getLogger("imp-py").info("Copying %s to %s", path_from, os.path.join(path_to, package_name))
         shutil.copyfile(path_from, os.path.join(path_to, package_name))
     elif mime == "application/zip":
-        import zipfile
-        import tempfile
         zip = zipfile.ZipFile(path_from, "r")
         try:
             info = zip.getinfo("package.json")
