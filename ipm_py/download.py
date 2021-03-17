@@ -42,6 +42,7 @@ def download_http(url: str, path_to: str):
     with tempfile.NamedTemporaryFile(mode="wb", suffix="_" + filename if filename else None) as tmpf:
         logging.getLogger("imp-py").info("Connecting to %s", urllib.parse.urlsplit(url).hostname)
         with urllib.request.urlopen(url) as response:
+            print(response)
             logging.getLogger("imp-py").info("Downloading %s to %s", url, tmpf.name)
             shutil.copyfileobj(response, tmpf)
         download_file(tmpf.name, path_to)
@@ -62,22 +63,17 @@ def download_git(url: str, path_to: str):
     import subprocess
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
-            subprocess.run([git, "init", tmpdir], check=True)
-            subprocess.run([git, "remote", "add", "origin", url], cwd=tmpdir, check=True)
-            if refspec:
-                subprocess.run([git, "fetch", "--depth=1", "origin", refspec], cwd=tmpdir, check=True)
-            else:
-                subprocess.run([git, "fetch", "--depth=1", "origin", "HEAD"], cwd=tmpdir, check=True)
-            subprocess.run([git, "reset", "--hard", "FETCH_HEAD"], cwd=tmpdir, check=True)
-            shutil.rmtree(os.path.join(tmpdir, ".git"))
+            subprocess.run([git, "-c", "advice.detachedHead=off", "clone", "--recursive", "--branch", refspec or "HEAD" , "--depth", "1", "--single-branch", url, tmpdir], check=True)
             download_file(tmpdir, path_to)
     except subprocess.CalledProcessError as e:
         cmd = e.cmd
-        if isinstance(cmd ,list):
+        if isinstance(cmd, list):
             import shlex
             cmd = shlex.join(cmd)
         logging.getLogger("imp-py").error("Command \"%s\" returned non-zero exit status %d.", cmd, e.returncode)
         exit(1)
+
+files_to_ignore = os.getenv("IPM_IGNORE_FILES", os.pathsep.join([".git", ".gitignore"])).split(os.pathsep)
 
 def download_file(path_from: str, path_to: str):
     path_from = os.path.abspath(path_from)
@@ -97,7 +93,7 @@ def download_file(path_from: str, path_to: str):
         package_name = "{}-{}".format(package_data["name"], package_data["version"])
         os.makedirs(path_to, exist_ok=True)
         logging.getLogger("imp-py").info("Copying %s to %s", path_from, os.path.join(path_to, package_name))
-        shutil.copytree(path_from, os.path.join(path_to, package_name))
+        shutil.copytree(path_from, os.path.join(path_to, package_name), ignore=(lambda src, names: files_to_ignore))
     elif mime == "application/x-tar":
         import tarfile
         import tempfile
